@@ -133,6 +133,9 @@ void ScoutBaseRos::Run() {
     messenger->SetOdometryTopicName(odom_topic_name_);
     if (simulated_robot_) messenger->SetSimulationMode(sim_control_rate_);
 
+    // CORREÇÃO: Inicializa os tópicos (Publishers/Subscribers) do ROS PRIMEIRO
+    messenger->SetupSubscription();
+
     // connect to robot and setup ROS subscription
     if (port_name_.find("can") != std::string::npos) {
       if (robot_->Connect(port_name_)) {
@@ -149,13 +152,13 @@ void ScoutBaseRos::Run() {
     }
 
     // publish robot state at 50Hz while listening to twist commands
-    messenger->SetupSubscription();
     keep_running_ = true;
     rclcpp::Rate rate(50);
     while (keep_running_) {
       messenger->PublishStateToROS();
       rclcpp::spin_some(shared_from_this());
-      rate.sleep();
+      //rate.sleep();
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   } else {
     std::unique_ptr<ScoutMessenger<ScoutMiniOmniRobot>> messenger =
@@ -166,6 +169,9 @@ void ScoutBaseRos::Run() {
     messenger->SetBaseFrame(base_frame_);
     messenger->SetOdometryTopicName(odom_topic_name_);
     if (simulated_robot_) messenger->SetSimulationMode(sim_control_rate_);
+
+    // CORREÇÃO: Inicializa os tópicos (Publishers/Subscribers) do ROS PRIMEIRO
+    messenger->SetupSubscription();
 
     // connect to robot and setup ROS subscription
     if (port_name_.find("can") != std::string::npos) {
@@ -183,7 +189,6 @@ void ScoutBaseRos::Run() {
     }
 
     // publish robot state at 50Hz while listening to twist commands
-    messenger->SetupSubscription();
     rclcpp::Rate rate(50);
     keep_running_ = true;
     while (keep_running_) {
@@ -193,4 +198,5 @@ void ScoutBaseRos::Run() {
     }
   }
 }
+
 }  // namespace westonrobot
