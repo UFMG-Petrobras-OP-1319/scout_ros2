@@ -67,6 +67,17 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}/)
   
 if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_library(scout_can_mock SHARED test/can_mock.cpp)
+  target_link_libraries(scout_can_mock dl)
+  add_test(NAME can_setup_startup
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_can_setup.py)
+  add_test(NAME node_startup
+    COMMAND ${CMAKE_COMMAND} -E env
+      SCOUT_BASE_TEST_NODE=$<TARGET_FILE:scout_base_node>
+      SCOUT_BASE_TEST_CAN_MOCK=$<TARGET_FILE:scout_can_mock>
+      ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/test_node_startup.py)
+  set_tests_properties(node_startup PROPERTIES TIMEOUT 45)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # uncomment the line when a copyright and license is not present in all source files

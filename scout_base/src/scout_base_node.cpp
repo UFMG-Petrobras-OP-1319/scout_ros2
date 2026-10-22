@@ -6,36 +6,37 @@
  *
  * Copyright (c) 2021 Weston Robot Pte. Ltd.
  */
-
+#include <cstdlib>
+#include <csignal>
+#include <iostream>
 #include <memory>
-
 #include <rclcpp/rclcpp.hpp>
-#include <rclcpp/executor.hpp>
-#include <nav_msgs/msg/odometry.hpp>
-#include <sensor_msgs/msg/joint_state.hpp>
-#include <tf2_ros/transform_broadcaster.h>
-
 #include "scout_base/scout_base_ros.hpp"
 
-using namespace westonrobot;
-
-std::shared_ptr<ScoutBaseRos> robot;
-
-void DetachRobot(int signal) {
-  (void)signal;
-  robot->Stop();
+namespace {
+volatile std::sig_atomic_t stop_requested = 0;
+void RequestStop(int) { stop_requested = 1; }
 }
 
 int main(int argc, char **argv) {
-  // setup ROS node
-  rclcpp::init(argc, argv);
-  //   std::signal(SIGINT, DetachRobot);
-
-  robot = std::make_shared<ScoutBaseRos>("scout");
-  if (robot->Initialize()) {
-    std::cout << "Robot initialized, start running ..." << std::endl;
-    robot->Run();
+  std::signal(SIGINT, RequestStop);
+  std::signal(SIGTERM, RequestStop);
+  int result = EXIT_FAILURE;
+  try {
+    rclcpp::init(argc, argv, rclcpp::InitOptions(), rclcpp::SignalHandlerOptions::None);
+    // Destroy ROS entities and join CAN workers before tearing down the RMW
+    // context, including when initialization or Zenoh entity creation throws.
+    {
+      auto robot = std::make_shared<westonrobot::ScoutBaseRos>("scout", [] { return stop_requested != 0; });
+      if (robot->Initialize()) result = robot->Run() ? EXIT_SUCCESS : EXIT_FAILURE;
+      else if (stop_requested) result = EXIT_SUCCESS;
+      else std::cerr << "scout_base initialization failed" << std::endl;
+      robot->Stop();
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "scout_base failed (CAN/ROS middleware): " << e.what() << std::endl;
+    if (stop_requested) result = EXIT_SUCCESS;
   }
-
-  return 0;
+  if (rclcpp::ok()) rclcpp::shutdown();
+  return result;
 }

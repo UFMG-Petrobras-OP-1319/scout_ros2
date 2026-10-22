@@ -1,15 +1,19 @@
 import os
+import runpy
 import launch
 import launch_ros
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    startup = runpy.run_path(os.path.join(
+        get_package_share_directory('scout_base'), 'launch', 'can_setup.py'))
+    prepare_can = startup['prepare_can']
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false',
                                              description='Use simulation clock if true')
 
@@ -36,8 +40,10 @@ def generate_launch_description():
         package='scout_base',
         executable='scout_base_node',
         output='screen',
+        on_exit=startup['on_base_exit'],
         emulate_tty=True,
         parameters=[{
+                'protocol_timeout_sec': launch.substitutions.LaunchConfiguration('protocol_timeout_sec'),
                 'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time'),
                 'port_name': launch.substitutions.LaunchConfiguration('port_name'),                
                 'odom_frame': launch.substitutions.LaunchConfiguration('odom_frame'),
@@ -59,5 +65,9 @@ def generate_launch_description():
         is_omni_wheel_arg,
         simulated_robot_arg,
         sim_control_rate_arg,
+        DeclareLaunchArgument('can_timeout_sec', default_value='10'),
+        DeclareLaunchArgument('configure_can', default_value='true'),
+        DeclareLaunchArgument('protocol_timeout_sec', default_value='5'),
+        OpaqueFunction(function=prepare_can),
         scout_base_node
     ])

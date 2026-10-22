@@ -11,6 +11,7 @@
 #define SCOUT_BASE_ROS_HPP
 
 #include <atomic>
+#include <functional>
 #include <memory>
 
 #include <rclcpp/rclcpp.hpp>
@@ -20,10 +21,11 @@
 namespace westonrobot {
 class ScoutBaseRos : public rclcpp::Node {
  public:
-  ScoutBaseRos(std::string node_name);
+  ScoutBaseRos(std::string node_name,
+               std::function<bool()> stop_requested = [] { return false; });
 
   bool Initialize();
-  void Run();
+  bool Run();
   void Stop();
 
  private:
@@ -37,12 +39,14 @@ class ScoutBaseRos : public rclcpp::Node {
 
   bool simulated_robot_ = false;
   int sim_control_rate_ = 50;
+  int protocol_timeout_sec_ = 5;
 
   bool is_omni_ = false;
   std::shared_ptr<ScoutRobot> robot_;
   std::shared_ptr<ScoutMiniOmniRobot> omni_robot_;
 
   std::atomic<bool> keep_running_;
+  std::function<bool()> stop_requested_;
 
   void LoadParameters();
 };
