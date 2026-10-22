@@ -13,8 +13,8 @@
 #include "ugv_sdk/utilities/protocol_detector.hpp"
 
 namespace westonrobot {
-ScoutBaseRos::ScoutBaseRos(std::string node_name)
-    : rclcpp::Node(node_name), keep_running_(false) {
+ScoutBaseRos::ScoutBaseRos(std::string node_name, std::function<bool()> stop_requested)
+    : rclcpp::Node(node_name), keep_running_(false), stop_requested_(stop_requested) {
   this->declare_parameter("port_name", rclcpp::ParameterValue("can0"));
 
   this->declare_parameter("odom_frame", rclcpp::ParameterValue("odom"));
@@ -27,6 +27,7 @@ ScoutBaseRos::ScoutBaseRos(std::string node_name)
   this->declare_parameter("simulated_robot", rclcpp::ParameterValue(false));
   this->declare_parameter("control_rate", rclcpp::ParameterValue(50));
 
+  this->declare_parameter("protocol_timeout_sec", rclcpp::ParameterValue(5));
   LoadParameters();
 }
 
@@ -43,6 +44,10 @@ void ScoutBaseRos::LoadParameters() {
 
   this->get_parameter_or<bool>("simulated_robot", simulated_robot_, false);
   this->get_parameter_or<int>("control_rate", sim_control_rate_, 50);
+
+  this->get_parameter("protocol_timeout_sec", protocol_timeout_sec_);
+  if (protocol_timeout_sec_ <= 0)
+    throw std::invalid_argument("protocol_timeout_sec must be positive");
 
   std::cout << "Loading parameters: " << std::endl;
   std::cout << "- port name: " << port_name_ << std::endl;
@@ -70,7 +75,7 @@ bool ScoutBaseRos::Initialize() {
 
   ProtocolDetector detector;
   if (detector.Connect(port_name_)) {
-    auto proto = detector.DetectProtocolVersion(5);
+    auto proto = detector.DetectProtocolVersion(protocol_timeout_sec_, [this] { return stop_requested_() || !rclcpp::ok(); });
     if (proto == ProtocolVersion::AGX_V1) {
       std::cout << "Detected protocol: AGX_V1" << std::endl;
       if (!is_omni_wheel_) {
@@ -109,10 +114,30 @@ bool ScoutBaseRos::Initialize() {
             << std::endl;
       }
     } else {
-      std::cout << "Detected protocol: UNKONWN" << std::endl;
+      std::cerr << "Detected protocol: UNKNOWN on " << port_name_ << ": ";
+      switch (detector.GetStatus()) {
+        case ProtocolDetector::Status::NO_FRAMES:
+          std::cerr << "timeout: no CAN frames received; interface UP does not "
+                       "prove robot communication (check power, wiring, bitrate 500000)";
+          break;
+        case ProtocolDetector::Status::UNRECOGNIZED_FRAMES:
+          std::cerr << "received " << detector.GetReceivedFrameCount()
+                    << " frames, but no supported protocol signature";
+          break;
+        case ProtocolDetector::Status::CONFLICTING_PROTOCOLS:
+          std::cerr << "conflicting V1/V2 signatures";
+          break;
+        case ProtocolDetector::Status::CANCELLED:
+          std::cerr << "detection cancelled during shutdown";
+          break;
+        default:
+          std::cerr << "CAN transport failed during protocol detection";
+      }
+      std::cerr << std::endl;
       return false;
     }
   } else {
+    std::cerr << "Cannot open CAN interface " << port_name_ << std::endl;
     return false;
   }
 
@@ -121,7 +146,9 @@ bool ScoutBaseRos::Initialize() {
 
 void ScoutBaseRos::Stop() { keep_running_ = false; }
 
-void ScoutBaseRos::Run() {
+bool ScoutBaseRos::Run() {
+  if (stop_requested_()) return true;
+  if (!rclcpp::ok()) return false;
   // instantiate a ROS messenger
   if (!is_omni_) {
     std::unique_ptr<ScoutMessenger<ScoutRobot>> messenger =
@@ -137,24 +164,26 @@ void ScoutBaseRos::Run() {
     messenger->SetupSubscription();
 
     // connect to robot and setup ROS subscription
-    if (port_name_.find("can") != std::string::npos) {
+    {
       if (robot_->Connect(port_name_)) {
         robot_->EnableCommandedMode();
         std::cout << "Using CAN bus to talk with the robot" << std::endl;
       } else {
         std::cout << "Failed to connect to the robot CAN bus" << std::endl;
-        return;
+        return false;
       }
-    } else {
-      std::cout << "Please check the specified port name is a CAN port"
-                << std::endl;
-      return;
     }
 
     // publish robot state at 50Hz while listening to twist commands
     keep_running_ = true;
     rclcpp::Rate rate(50);
-    while (keep_running_) {
+    std::cout << "SCOUT_BASE_READY port=" << port_name_ << std::endl;
+    while (keep_running_ && rclcpp::ok() && !stop_requested_()) {
+      if (!robot_->IsConnected()) {
+        std::cerr << "Fatal CAN transport failure on " << port_name_
+                  << "; exiting scout_base for supervisor recovery" << std::endl;
+        return false;
+      }
       messenger->PublishStateToROS();
       rclcpp::spin_some(shared_from_this());
       //rate.sleep();
@@ -174,29 +203,32 @@ void ScoutBaseRos::Run() {
     messenger->SetupSubscription();
 
     // connect to robot and setup ROS subscription
-    if (port_name_.find("can") != std::string::npos) {
+    {
       if (omni_robot_->Connect(port_name_)) {
         omni_robot_->EnableCommandedMode();
         std::cout << "Using CAN bus to talk with the robot" << std::endl;
       } else {
         std::cout << "Failed to connect to the robot CAN bus" << std::endl;
-        return;
+        return false;
       }
-    } else {
-      std::cout << "Please check the specified port name is a CAN port"
-                << std::endl;
-      return;
     }
 
     // publish robot state at 50Hz while listening to twist commands
     rclcpp::Rate rate(50);
     keep_running_ = true;
-    while (keep_running_) {
+    std::cout << "SCOUT_BASE_READY port=" << port_name_ << std::endl;
+    while (keep_running_ && rclcpp::ok() && !stop_requested_()) {
+      if (!omni_robot_->IsConnected()) {
+        std::cerr << "Fatal CAN transport failure on " << port_name_
+                  << "; exiting scout_base for supervisor recovery" << std::endl;
+        return false;
+      }
       messenger->PublishStateToROS();
       rclcpp::spin_some(shared_from_this());
       rate.sleep();
     }
   }
+  return rclcpp::ok() || stop_requested_();
 }
 
 }  // namespace westonrobot
